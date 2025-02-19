@@ -58,7 +58,7 @@ async function logTransactionToSupabase(eventName, user, tokenDeposit, amount, p
                     .from('user_transactions')
                     .insert([
                         {
-                            address: user,
+                            address: user.toLowerCase(), // Convert address to lowercase
                             transaction_hash: transactionHash,
                             chain_name: chainName,
                             event_name: eventName,
@@ -71,7 +71,7 @@ async function logTransactionToSupabase(eventName, user, tokenDeposit, amount, p
                     ]);
 
                 if (error) throw error;
-                console.log(`Transaction logged: ${eventName} for user ${user}`);
+                console.log(`Transaction logged: ${eventName} for user ${user.toLowerCase()}`);
                 break;
             } catch (err) {
                 retries--;
@@ -91,50 +91,50 @@ async function updateUserDeposit(address, depositAmount, tokenAmount, usdtAmount
         depositAmount = Number(depositAmount) || 0;
         tokenAmount = Number(tokenAmount) || 0;
         usdtAmount = Number(usdtAmount) || 0;
+        
+        // Convert address to lowercase
+        const lowerAddress = address.toLowerCase();
 
-        const { data: existingDeposit, error: fetchError } = await supabase
+        // First, try to get existing record
+        const { data: existingDeposit } = await supabase
             .from('user_deposits')
             .select('*')
-            .eq('address', address)
-            .maybeSingle();
+            .eq('address', lowerAddress)
+            .single();
 
-        if (fetchError && !fetchError.message.includes('No rows found')) {
-            throw fetchError;
-        }
-
-        // Initialize values, using existing values if they exist
-        let totalNativeDeposit = Number(existingDeposit?.total_native_deposit) || 0;
-        let totalUsdtDeposit = Number(existingDeposit?.total_usdt_deposit) || 0;
-        let totalTokenAmount = Number(existingDeposit?.total_token_amount) || 0;
-
-        // Update the appropriate totals
-        if (paymentType === 'native') {
-            totalNativeDeposit += depositAmount;
-            totalTokenAmount += tokenAmount;  // Always update token amount
-        } else if (paymentType === 'usdt') {
-            totalUsdtDeposit += usdtAmount;
-            totalTokenAmount += tokenAmount;  // Always update token amount
-        } else if (paymentType === 'token') {
-            totalTokenAmount += tokenAmount;
-        }
-
-        const { error: upsertError } = await supabase
-            .from('user_deposits')
-            .upsert({
-                address,
-                total_native_deposit: totalNativeDeposit.toString(),
-                total_usdt_deposit: totalUsdtDeposit.toString(),
-                total_token_amount: totalTokenAmount.toString(),
+        let newData;
+        if (existingDeposit) {
+            // If record exists, update the values
+            newData = {
+                address: lowerAddress, // Include address in updates
+                total_native_deposit: (Number(existingDeposit.total_native_deposit || 0) + (paymentType === 'native' ? depositAmount : 0)).toString(),
+                total_usdt_deposit: (Number(existingDeposit.total_usdt_deposit || 0) + (paymentType === 'usdt' ? usdtAmount : 0)).toString(),
+                total_token_amount: (Number(existingDeposit.total_token_amount || 0) + tokenAmount).toString(),
                 last_updated: new Date().toISOString(),
-            }, {
-                onConflict: 'address',
-                returning: 'minimal'
+            };
+        } else {
+            // If no record exists, create new data
+            newData = {
+                address: lowerAddress,
+                total_native_deposit: paymentType === 'native' ? depositAmount.toString() : '0',
+                total_usdt_deposit: paymentType === 'usdt' ? usdtAmount.toString() : '0',
+                total_token_amount: tokenAmount.toString(),
+                last_updated: new Date().toISOString(),
+            };
+        }
+
+        const { error } = await supabase
+            .from('user_deposits')
+            .upsert(newData, {
+                onConflict: 'address'
             });
 
-        if (upsertError) throw upsertError;
-        console.log(`User deposit updated for ${address}`);
+        if (error) throw error;
+        console.log(`User deposit updated for ${lowerAddress}`);
     } catch (err) {
-        console.error('Error updating user deposit:', err.message);
+        console.error('Error updating user deposit:', err);
+        // Log full error details for debugging
+        console.error('Full error:', JSON.stringify(err, null, 2));
     }
 }
 
